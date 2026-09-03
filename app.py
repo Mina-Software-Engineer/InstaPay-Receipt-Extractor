@@ -54,7 +54,7 @@ class ReceiptThumbnail(QWidget):
         self.status_label = QLabel(status)
         self.status_label.setFixedHeight(22)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: #909090; background: transparent; border: none; font-size: 9px;")
+        self.status_label.setStyleSheet("color: #3F3F3F; background: transparent; border: none; font-size: 9px;")
         layout.addWidget(self.status_label)
 
     def _emit_clicked(self, checked=False):
@@ -117,10 +117,10 @@ class CircularProgress(QWidget):
         rect = QRectF(7, 7, 58, 58)
         painter.setPen(QPen(QColor("#eeeeee"), 3))
         painter.drawArc(rect, 0, 360 * 16)
-        painter.setPen(QPen(QColor("#909090"), 3))
+        painter.setPen(QPen(QColor("#3F3F3F"), 3))
         painter.drawArc(rect, 90 * 16, -int(self._value * 360 * 16 / 100))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor("#909090")))
+        painter.setBrush(QBrush(QColor("#3F3F3F")))
         painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
         painter.drawText(QRectF(0, 0, float(self.width()), float(self.height())), Qt.AlignmentFlag.AlignCenter, f"{self._value}%")
         painter.end()
@@ -143,9 +143,9 @@ class ExtractionProgressDialog(QDialog):
         card.setObjectName("progressCard")
         card.setStyleSheet("""
             QFrame#progressCard { background: #FBF5E5; border: 1px solid #d8d0c0; border-radius: 12px; }
-            QLabel#progressTitle { color: #909090; font-size: 12px; font-weight: 600; }
-            QLabel#progressMessage { color: #909090; font-size: 9px; }
-            QPushButton#cancelButton { background: #121212; color: #909090; border: none; border-radius: 14px; padding: 7px 22px; font-size: 10px; }
+            QLabel#progressTitle { color: #3F3F3F; font-size: 14px; font-weight: 600; }
+            QLabel#progressMessage { color: #3F3F3F; font-size: 9px; }
+            QPushButton#cancelButton { background: #121212; color: #3F3F3F; border: none; border-radius: 14px; padding: 7px 22px; font-size: 14px; }
             QPushButton#cancelButton:hover { background: #242424; }
         """)
         shadow = QGraphicsDropShadowEffect(card)
@@ -216,12 +216,12 @@ class SettingsWindow(QDialog):
         self.resize(550, 560)
         self.setStyleSheet("""
             QScrollBar:vertical { background: #FBF5E5; width: 10px; margin: 3px 2px; border-radius: 5px; }
-            QScrollBar::handle:vertical { background: #909090; min-height: 30px; border-radius: 5px; }
+            QScrollBar::handle:vertical { background: #3F3F3F; min-height: 30px; border-radius: 5px; }
             QScrollBar::handle:vertical:hover { background: #121212; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
             QScrollBar:horizontal { background: #FBF5E5; height: 10px; margin: 2px 3px; border-radius: 5px; }
-            QScrollBar::handle:horizontal { background: #909090; min-width: 30px; border-radius: 5px; }
+            QScrollBar::handle:horizontal { background: #3F3F3F; min-width: 30px; border-radius: 5px; }
             QScrollBar::handle:horizontal:hover { background: #121212; }
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
             QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
@@ -327,11 +327,18 @@ class SettingsWindow(QDialog):
         layout = QVBoxLayout(page)
         title = QLabel("<b>Admin Data Management</b>")
         layout.addWidget(title)
-        ai_group = QGroupBox("AI Extraction (Gemini API)")
+        ai_group = QGroupBox("AI Extraction (Perplexity Agent API)")
         ai_layout = QFormLayout()
-        self.gemini_key_input = QLineEdit(self.db.get_setting("gemini_api_key", ""))
+        self.gemini_key_input = QLineEdit(self.db.get_setting("perplexity_api_key", self.db.get_setting("gemini_api_key", self.db.get_setting("mistral_api_key", ""))))
         self.gemini_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        ai_layout.addRow("Gemini API Key:", self.gemini_key_input)
+        api_key_row = QWidget()
+        api_key_layout = QHBoxLayout(api_key_row)
+        api_key_layout.setContentsMargins(0, 0, 0, 0)
+        api_key_layout.addWidget(self.gemini_key_input, 1)
+        save_api_key_button = QPushButton("Save API Key")
+        save_api_key_button.clicked.connect(self.save_api_key)
+        api_key_layout.addWidget(save_api_key_button)
+        ai_layout.addRow("Perplexity API Key:", api_key_row)
         ai_group.setLayout(ai_layout)
         layout.addWidget(ai_group)
         warning = QLabel("These actions are permanent. Select the receipt date, then confirm before deleting.")
@@ -579,8 +586,17 @@ class SettingsWindow(QDialog):
             generate_approved_note_numbers_report(self.db)
             self.load_note_numbers()
 
+    def save_api_key(self):
+        api_key = self.gemini_key_input.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "API Key Required", "Enter a Perplexity API key before saving.")
+            self.gemini_key_input.setFocus()
+            return
+        self.db.set_setting("perplexity_api_key", api_key)
+        QMessageBox.information(self, "API Key Saved", "The Perplexity API key was saved successfully.")
+
     def save_settings(self):
-        self.db.set_setting("gemini_api_key", self.gemini_key_input.text().strip())
+        self.db.set_setting("perplexity_api_key", self.gemini_key_input.text().strip())
         self.db.set_setting("outlook_recipient", ";".join(self.db.get_enabled_email_recipients()))
         entered = [line.strip() for line in self.accounts_text.toPlainText().splitlines() if line.strip()]
         current = {a["account_number"] for a in self.db.get_approved_accounts()}
@@ -611,20 +627,20 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         central.setStyleSheet("""
-            QWidget { background: #FBF5E5; color: #909090; }
-            QLineEdit, QTextEdit { background: #FBF5E5; color: #909090; border: 1px solid #d8d0c0; border-radius: 5px; padding: 5px; }
-            QGroupBox { background: #FBF5E5; color: #909090; border: 1px solid #d8d0c0; border-radius: 8px; margin-top: 10px; padding-top: 10px; }
-            QGroupBox::title { color: #909090; subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-            QPushButton { background: #FBF5E5; color: #909090; border: 1px solid #d8d0c0; border-radius: 6px; padding: 8px 12px; }
+            QWidget { background: #FBF5E5; color: #3F3F3F; font-size: 14px; }
+            QLineEdit, QTextEdit { background: #FBF5E5; color: #3F3F3F; border: 1px solid #d8d0c0; border-radius: 5px; padding: 6px; font-size: 14px; }
+            QGroupBox { background: #FBF5E5; color: #3F3F3F; border: 1px solid #d8d0c0; border-radius: 8px; margin-top: 10px; padding-top: 10px; font-size: 14px; }
+            QGroupBox::title { color: #3F3F3F; subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+            QPushButton { background: #FBF5E5; color: #3F3F3F; border: 1px solid #d8d0c0; border-radius: 6px; padding: 9px 12px; font-size: 14px; }
             QPushButton:hover { background: #eee7d8; }
             QScrollArea { background: #FBF5E5; border: 1px solid #d8d0c0; }
             QScrollBar:vertical { background: #FBF5E5; width: 10px; margin: 3px 2px 3px 2px; border-radius: 5px; }
-            QScrollBar::handle:vertical { background: #909090; min-height: 30px; border-radius: 5px; }
+            QScrollBar::handle:vertical { background: #3F3F3F; min-height: 30px; border-radius: 5px; }
             QScrollBar::handle:vertical:hover { background: #121212; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
             QScrollBar:horizontal { background: #FBF5E5; height: 10px; margin: 2px 3px 2px 3px; border-radius: 5px; }
-            QScrollBar::handle:horizontal { background: #909090; min-width: 30px; border-radius: 5px; }
+            QScrollBar::handle:horizontal { background: #3F3F3F; min-width: 30px; border-radius: 5px; }
             QScrollBar::handle:horizontal:hover { background: #121212; }
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
             QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
@@ -636,9 +652,9 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(230)
         sidebar.setStyleSheet("""
             QFrame#sidebar { background-color: #121212; border-radius: 8px; }
-            QFrame#sidebar QLabel { color: #909090; }
-            QFrame#sidebar QPushButton { color: #909090; background-color: #121212; border: none; border-radius: 6px; padding: 11px; text-align: left; }
-            QFrame#sidebar QPushButton:hover { background-color: #242424; color: #909090; }
+            QFrame#sidebar QLabel { color: #F2E8D5; }
+            QFrame#sidebar QPushButton { color: #F2E8D5; background-color: #121212; border: none; border-radius: 6px; padding: 11px; text-align: left; }
+            QFrame#sidebar QPushButton:hover { background-color: #242424; color: #FFF8EA; }
         """)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(14, 18, 14, 18)
@@ -669,8 +685,11 @@ class MainWindow(QMainWindow):
         review_columns.setSpacing(12)
 
         fields_widget = QWidget()
+        fields_widget.setFixedWidth(420)
+        fields_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         fields_layout = QVBoxLayout(fields_widget)
         self.review_label = QLabel("<b>Review Selected Receipt</b><br><small>Click a thumbnail, compare the image, and correct the fields.</small>")
+        self.review_label.setStyleSheet("font-size: 14px; color: #3F3F3F;")
         fields_layout.addWidget(self.review_label)
         form_group = QGroupBox("Selected Receipt Fields (Editable)")
         form_layout = QFormLayout()
@@ -711,11 +730,13 @@ class MainWindow(QMainWindow):
         form_layout.addRow("", self.lbl_note_err)
         form_layout.addRow("", self.lbl_note_info)
         form_group.setLayout(form_layout)
+        form_group.setFixedWidth(404)
+        form_group.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         fields_layout.addWidget(form_group)
         self.btn_save_send = QPushButton("Save and Send")
         self.btn_save_send.setEnabled(False)
         self.btn_save_send.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_save_send.setStyleSheet("font-weight: bold; background-color: #121212; color: #909090; padding: 11px; border: 1px solid #909090;")
+        self.btn_save_send.setStyleSheet("font-weight: bold; background-color: #121212; color: #F2E8D5; padding: 11px; border: 1px solid #3F3F3F;")
         self.btn_save_send.clicked.connect(self.save_and_send)
         fields_layout.addWidget(self.btn_save_send)
         fields_layout.addStretch()
@@ -728,7 +749,7 @@ class MainWindow(QMainWindow):
         fields_copyright = QLabel("InstaPay Receipt Register © 2026 EDITA. All rights reserved.")
         fields_copyright.setAlignment(Qt.AlignmentFlag.AlignCenter)
         fields_copyright.setWordWrap(True)
-        fields_copyright.setStyleSheet("color: #909090; font-size: 9px; padding: 2px;")
+        fields_copyright.setStyleSheet("color: #3F3F3F; font-size: 9px; padding: 2px;")
         fields_layout.addWidget(fields_copyright)
         review_columns.addWidget(fields_widget, 3)
 
@@ -738,7 +759,7 @@ class MainWindow(QMainWindow):
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.addWidget(QLabel("<b>Receipt Image Preview</b>"))
         self.image_label = PreviewLabel("No images selected.\nClick 'Select Receipt Images' to begin.")
-        self.image_label.setStyleSheet("border: 2px dashed #d8d0c0; background: #FBF5E5; color: #909090;")
+        self.image_label.setStyleSheet("border: 2px dashed #d8d0c0; background: #FBF5E5; color: #3F3F3F;")
         self.image_label.setMinimumWidth(470)
         self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         preview_layout.addWidget(self.image_label, 1)
@@ -794,7 +815,7 @@ class MainWindow(QMainWindow):
             link.setToolTip(f"Open {label} in your web browser")
             link.setStyleSheet("""
                 QPushButton {
-                    color: #909090;
+                    color: #3F3F3F;
                     background: transparent;
                     border: none;
                     border-radius: 6px;
@@ -978,9 +999,9 @@ class MainWindow(QMainWindow):
     def extract_all(self):
         if not self.pending:
             return
-        api_key = self.db.get_setting("gemini_api_key", "").strip()
+        api_key = self.db.get_setting("perplexity_api_key", self.db.get_setting("gemini_api_key", self.db.get_setting("mistral_api_key", ""))).strip()
         if not api_key:
-            QMessageBox.warning(self, "API Key Missing", "Please configure your Gemini API Key in Settings & API Key.")
+            QMessageBox.warning(self, "API Key Missing", "Please configure your Perplexity API Key in Admin Settings.")
             self.open_settings()
             return
         self.save_form_to_current()

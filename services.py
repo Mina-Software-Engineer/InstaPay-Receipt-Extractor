@@ -1,100 +1,141 @@
-import os
+import base64
 import json
-import sys
+import mimetypes
+import os
 from datetime import datetime
-from PIL import Image
 
 try:
-    from google import genai
+    from perplexity import Perplexity
 except ImportError:
-    genai = None
+    Perplexity = None
+
 
 class OcrService:
+    """Extract InstaPay receipt fields with the Perplexity Agent API."""
+
+    EXTRACTION_MODEL = "anthropic/claude-opus-4-6"
+
+    @staticmethod
+    def _image_data_url(image_path):
+        mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+        supported = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        if mime_type not in supported:
+            mime_type = "image/jpeg"
+        with open(image_path, "rb") as image_file:
+            encoded = base64.b64encode(image_file.read()).decode("utf-8")
+        return f"data:{mime_type};base64,{encoded}"
+
+    @staticmethod
+    def _response_text(response):
+        text = getattr(response, "output_text", None)
+        if text:
+            return str(text).strip()
+        output = getattr(response, "output", None) or []
+        for message in output:
+            for content in getattr(message, "content", None) or []:
+                text_value = getattr(content, "text", None)
+                if text_value:
+                    return str(text_value).strip()
+                if isinstance(content, dict) and content.get("text"):
+                    return str(content["text"]).strip()
+        return ""
+
+    @staticmethod
+    def _parse_json(text):
+        text = str(text or "").strip()
+        if "```json" in text:
+            text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in text:
+            text = text.split("```", 1)[1].split("```", 1)[0].strip()
+        return json.loads(text)
+
     @staticmethod
     def process_receipt(image_path, api_key=None):
-        """
-        Uses the Google GenAI SDK with gemini-3.1-flash-lite (with a legacy fallback if unavailable)
-        to analyze the receipt image and extract structured data.
-        """
         if not image_path or not os.path.exists(image_path):
             raise FileNotFoundError(f"Receipt image not found: {image_path}")
-
-        if genai is None:
-            raise RuntimeError("google-genai library is not installed. Please run 'pip install google-genai'.")
-
+        if Perplexity is None:
+            raise RuntimeError("Perplexity SDK is not installed. Activate the application environment and run: python -m pip install --upgrade perplexityai")
         if not api_key:
-            raise ValueError("Gemini API Key is not configured. Please add your API Key in Settings.")
+            raise ValueError("Perplexity API Key is not configured. Please add it in Admin Settings.")
+
+        prompt = """
+        Read the receipt visually and extract the following 7 fields precisely.
+        Return a JSON object matching the supplied schema and no other content.
+        Do not use web search, outside knowledge, guesses, or fabricated values.
+        First locate the printed labels on the receipt, then read the value on the same line or the immediately following line.
+        Preserve the exact characters that are visible, except for the normalization explicitly requested below.
+
+        Rules:
+        - money_value: read the numeric transfer amount immediately to the left of the printed EGP currency label; remove thousands separators only.
+        - account_number: read the recipient account number/label under the recipient account name ending with @instapay. Never return the sender account from From, even if it is easier to read.
+        - receipt_number: read the value after the printed Reference label.
+        - receipt_date: read the value after the printed Date label and format it as DD MMM YYYY HH:MM AM/PM.
+        - note: copy all visible text after the printed Note label, possibly empty.
+        - note_name: return only the visible letters/words in Note after excluding any digits, trimmed.
+        - note_number: return only the digits visibly present in Note. Return an empty string when no digits are visible. Never invent, infer, or calculate a number.
+        - If a field is unreadable, return an empty string rather than guessing.
+        """
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "money_value": {"type": "string"},
+                "account_number": {"type": "string"},
+                "receipt_number": {"type": "string"},
+                "receipt_date": {"type": "string"},
+                "note": {"type": "string"},
+                "note_name": {"type": "string"},
+                "note_number": {"type": "string"},
+            },
+            "required": [
+                "money_value", "account_number", "receipt_number", "receipt_date",
+                "note", "note_name", "note_number",
+            ],
+        }
 
         try:
-            client = genai.Client(api_key=api_key)
-            img = Image.open(image_path)
-            
-            prompt = """
-            Analyze this InstaPay receipt image and extract the following 7 fields precisely in JSON format:
-            1. "money_value": The numeric transfer amount to the left of "EGP" (e.g., "70" or "1500.00").
-            2. "account_number": The recipient account number/label from the "To" section only. Prefer the recipient's @instapay handle/number shown under "To". NEVER return the sender's @instapay handle or sender label from the "From" section.
-            3. "receipt_number": The reference/receipt number located after the word "Reference".
-            4. "receipt_date": The date and time located after the word "Date:" (formatted as DD MMM YYYY HH:MM AM/PM).
-            5. "note": The complete text following the word "Note" (can be empty string if nothing is written).
-            6. "note_name": The letters/words in the Note section, excluding the numeric validation number. Return the text exactly as visible, trimmed. If no name/text is visible, return an empty string.
-            7. "note_number": The numeric validation number visible inside the Note section. Return only the digits of that number. If no number is visible, return an empty string. Do not invent a number.
-
-            Important layout rule: the receipt has both "From" and "To" sections. Extract account_number from the recipient in the "To" section, not from "From". For example, if From contains "sender@instapay" and To contains "recipient@instapay", return "recipient@instapay".
-
-            Return ONLY valid JSON with these exact keys:
-            {
-              "money_value": "",
-              "account_number": "",
-              "receipt_number": "",
-              "receipt_date": "",
-              "note": "",
-              "note_name": "",
-              "note_number": ""
-            }
-            """
-            
-            try:
-                response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
-                    contents=[prompt, img]
-                )
-            except Exception:
-                response = client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=[prompt, img]
-                )
-            
-            text_response = response.text.strip()
-            
-            if "```json" in text_response:
-                text_response = text_response.split("```json")[1].split("```")[0]
-            elif "```" in text_response:
-                text_response = text_response.split("```")[1].split("```")[0]
-            
-            text_response = text_response.strip()
-            data = json.loads(text_response)
-            
-            data["receipt_number"] = data.get("receipt_number", f"REC-{int(datetime.now().timestamp())}")
-            data["receipt_date"] = data.get("receipt_date", datetime.now().strftime("%d %b %Y %I:%M %p"))
-            data["account_number"] = data.get("account_number", "N/A")
-            data["money_value"] = data.get("money_value", "0.00")
-            data["note"] = data.get("note", "")
-            data["note_name"] = str(data.get("note_name", "")).strip()
-            data["note_number"] = str(data.get("note_number", "")).strip()
-
-            data["raw_text"] = f"Gemini API Extracted Data:\n{json.dumps(data, indent=2)}"
+            client = Perplexity(api_key=api_key)
+            responses_api = getattr(client, "responses", None)
+            create_response = getattr(responses_api, "create", None)
+            if not callable(create_response):
+                raise RuntimeError("The installed Perplexity SDK is incompatible. Reinstall it with: python -m pip install --upgrade perplexityai")
+            response = create_response(
+                model=OcrService.EXTRACTION_MODEL,
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": OcrService._image_data_url(image_path)},
+                        ],
+                    }
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "instapay_receipt", "schema": schema},
+                },
+                max_output_tokens=1000,
+            )
+            text_response = OcrService._response_text(response)
+            data = OcrService._parse_json(text_response)
+            data["receipt_number"] = data.get("receipt_number") or f"REC-{int(datetime.now().timestamp())}"
+            data["receipt_date"] = data.get("receipt_date") or datetime.now().strftime("%d %b %Y %I:%M %p")
+            data["account_number"] = data.get("account_number") or "N/A"
+            data["money_value"] = str(data.get("money_value") or "0.00").replace(",", "")
+            data["note"] = str(data.get("note") or "").strip()
+            data["note_name"] = str(data.get("note_name") or "").strip()
+            data["note_number"] = str(data.get("note_number") or "").strip()
+            data["raw_text"] = f"Perplexity Agent API Extracted Data:\n{json.dumps(data, indent=2)}"
             return data
+        except Exception as exc:
+            raise RuntimeError(f"Perplexity API extraction failed: {exc}") from exc
 
-        except Exception as e:
-            raise RuntimeError(f"Gemini API extraction failed: {str(e)}")
 
 class OutlookService:
     @staticmethod
     def send_excel_report(excel_paths, zip_path, recipients):
-        """
-        Opens Outlook and attaches all receipt-date Excel reports and the Receipt Images
-        ZIP archive. Uses .Display() for user review before sending.
-        """
+        """Open Outlook and attach all receipt-date Excel reports and the image ZIP."""
         if isinstance(recipients, str):
             recipients = [item.strip() for item in recipients.replace(",", ";").split(";") if item.strip()]
         recipients = [str(item).strip() for item in recipients if str(item).strip()]
@@ -108,33 +149,34 @@ class OutlookService:
         missing_excel = [path for path in excel_paths if not os.path.exists(path)]
         if missing_excel:
             raise FileNotFoundError(f"Excel report not found at {missing_excel[0]}")
-
         try:
             import win32com.client
-            
-            try:
-                outlook = win32com.client.Dispatch("Outlook.Application")
-            except Exception:
-                raise RuntimeError("Could not open Outlook. Please ensure classic Outlook is installed and running.")
-
+            outlook = None
+            dispatch_errors = []
+            for dispatcher in (win32com.client.DispatchEx, win32com.client.Dispatch):
+                try:
+                    outlook = dispatcher("Outlook.Application")
+                    break
+                except Exception as dispatch_exc:
+                    dispatch_errors.append(str(dispatch_exc))
+            if outlook is None:
+                details = dispatch_errors[-1] if dispatch_errors else "Unknown COM error"
+                raise RuntimeError(
+                    "Classic Outlook could not be started through Windows COM. "
+                    "Make sure classic Outlook is installed and configured, not only New Outlook. "
+                    f"Details: {details}"
+                )
             mail = outlook.CreateItem(0)
             mail.To = "; ".join(recipients)
             mail.Subject = f"InstaPay Receipts Report & Images - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             mail.Body = "Please find attached the consolidated InstaPay Receipts Excel report and the archive of receipt photos."
-            
-                        # Attach each receipt-date Excel report
             for excel_path in excel_paths:
                 mail.Attachments.Add(excel_path)
-
-            # Attach Images ZIP if exists
-
             if zip_path and os.path.exists(zip_path):
                 mail.Attachments.Add(os.path.abspath(zip_path))
-            
-            mail.Display()
+            mail.Display(False)
             return True
-            
         except ImportError:
             raise RuntimeError("The 'pywin32' library is not properly installed. Please run: pip install pywin32")
-        except Exception as e:
-            raise RuntimeError(f"Outlook operation failed: {str(e)}\n\nTip: Ensure Outlook is open and no dialog boxes are active.")
+        except Exception as exc:
+            raise RuntimeError(f"Outlook operation failed: {exc}\n\nTip: Ensure Outlook is open and no dialog boxes are active.")

@@ -103,22 +103,29 @@ def _safe_sheet_title(date_str):
     return date_str[:31]
 
 
+def _format_report_date(value):
+    parsed = value if hasattr(value, "year") else _parse_receipt_date(value)
+    if parsed is None:
+        return ""
+    return f"{parsed.day}-{parsed.month}-{parsed.year}"
+
+
+def _format_report_value(value):
+    try:
+        amount = float(str(value or "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return str(value or "").strip()
+    if amount.is_integer():
+        return f"{amount:,.0f}"
+    return f"{amount:,.2f}".rstrip("0").rstrip(".")
+
+
 def _write_receipt_workbook(path, date_str, receipts):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = _safe_sheet_title(date_str)
 
-    headers = [
-        "ID",
-        "Receipt Number",
-        "Account Number/Label",
-        "Photo Date",
-        "Receipt Date/Time",
-        "Amount (EGP)",
-        "Note Number",
-        "Source Image",
-        "Recorded At",
-    ]
+    headers = ["Date", "Value", "Client Code", "Receipt No"]
     ws.append(headers)
 
     for cell in ws[1]:
@@ -128,22 +135,15 @@ def _write_receipt_workbook(path, date_str, receipts):
         )
 
     for r in receipts:
+        row_date = _parse_receipt_date(r.get("receipt_date"))
         ws.append([
-            r["id"],
-            r["receipt_number"],
-            r["account_number"],
-            date_str,
-            r["receipt_date"],
-            r["money_value"],
+            _format_report_date(row_date or _parse_receipt_date(date_str)),
+            _format_report_value(r.get("money_value", "")),
             r.get("note_number", ""),
-            r["image_path"],
-            r["created_at"],
+            r.get("receipt_number", ""),
         ])
 
-    widths = {
-        "A": 10, "B": 24, "C": 30, "D": 18, "E": 28,
-        "F": 16, "G": 36, "H": 55, "I": 28,
-    }
+    widths = {"A": 16, "B": 16, "C": 30, "D": 24}
     for column, width in widths.items():
         ws.column_dimensions[column].width = width
     ws.freeze_panes = "A2"
